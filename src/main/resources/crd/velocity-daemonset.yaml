@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: velocity-daemonset
+  namespace: minecraft
+spec:
+  selector:
+    matchLabels:
+      app: velocity
+  template:
+    metadata:
+      labels:
+        app: velocity
+    spec:
+      containers:
+        - name: velocity
+          image: velocity:latest
+          ports:
+            - containerPort: 25577
+              name: minecraft
+          resources:
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+            requests:
+              memory: "128Mi"
+              cpu: "250m"
+      nodeSelector:
+        ingress-ready: "true"

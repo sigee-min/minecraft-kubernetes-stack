@@ -1,0 +1,15 @@
+apiVersion: aoldacraft.com/v1alpha1
+kind: MinecraftServerGroup
+metadata:
+  name: minecraft-server
+  namespace: default
+spec:
+  version: "1.18.1"
+  replicas: 4
+  resourceRequirements:
+    limits:
+      cpu: "0.1"
+      memory: "1Gi"
+    requests:
+      cpu: "0.1"
+      memory: "1Gi"
