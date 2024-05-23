@@ -2,22 +2,20 @@ package com.aoldacraft.minecraftkubernetesstack.operator;
 
 import com.aoldacraft.minecraftkubernetesstack.operator.customresources.MinecraftServerGroup;
 import com.aoldacraft.minecraftkubernetesstack.operator.customresources.MinecraftServerGroupStatus;
-import com.aoldacraft.minecraftkubernetesstack.operator.dependent.PodDependentResource;
 import io.fabric8.kubernetes.api.model.*;
-import io.fabric8.kubernetes.api.model.apps.Deployment;
-import io.fabric8.kubernetes.api.model.apps.DeploymentBuilder;
 import io.fabric8.kubernetes.client.KubernetesClient;
+import io.javaoperatorsdk.operator.api.config.informer.InformerConfiguration;
 import io.javaoperatorsdk.operator.api.reconciler.*;
 import io.javaoperatorsdk.operator.api.reconciler.Context;
 import io.javaoperatorsdk.operator.api.reconciler.dependent.Deleter;
+import io.javaoperatorsdk.operator.processing.event.ResourceID;
 import io.javaoperatorsdk.operator.processing.event.source.EventSource;
+import io.javaoperatorsdk.operator.processing.event.source.SecondaryToPrimaryMapper;
+import io.javaoperatorsdk.operator.processing.event.source.informer.InformerEventSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @ControllerConfiguration
@@ -27,146 +25,139 @@ public class MinecraftServerGroupController implements Reconciler<MinecraftServe
 
     private final Logger log = LoggerFactory.getLogger(MinecraftServerGroupController.class);
     private final KubernetesClient kubernetesClient;
-    private PodDependentResource podDependentResource;
 
     public MinecraftServerGroupController(KubernetesClient kubernetesClient) {
         this.kubernetesClient = kubernetesClient;
-        createDependentResources();
-    }
-
-    private void createDependentResources() {
-        this.podDependentResource = new PodDependentResource(kubernetesClient);
     }
 
     @Override
     public Map<String, EventSource> prepareEventSources(EventSourceContext<MinecraftServerGroup> context) {
-        Map<String, EventSource> eventSources = new HashMap<>();
-        eventSources.put("podDependentResource", podDependentResource.initEventSource(context));
-        return eventSources;
+        final SecondaryToPrimaryMapper<Pod> minecraftServerGroupsMatchingPodLabel =
+                (Pod pod) -> context.getPrimaryCache()
+                        .list(minecraftServerGroup -> minecraftServerGroup.getMetadata().getName().equals(
+                                pod.getMetadata().getLabels().get("minecraftservergroup")))
+                        .map(ResourceID::fromResource)
+                        .collect(Collectors.toSet());
+
+        InformerConfiguration<Pod> configuration =
+                InformerConfiguration.from(Pod.class, context)
+                        .withSecondaryToPrimaryMapper(minecraftServerGroupsMatchingPodLabel)
+                        .build();
+
+        return EventSourceInitializer.nameEventSources(new InformerEventSource<>(configuration, context));
     }
 
     @Override
     public UpdateControl<MinecraftServerGroup> reconcile(MinecraftServerGroup resource, Context<MinecraftServerGroup> context) {
         log.info("Reconciling MinecraftServerGroup: {}", resource.getMetadata().getName());
 
-        Deployment deployment = ensureDeploymentExists(resource);
-
-        updateStatus(resource, deployment);
-
-        // Reconcile the Pod
-        podDependentResource.reconcile(resource, context);
+        try {
+            ensurePodsExist(resource);
+            updateStatus(resource);
+        } catch (Exception e) {
+            log.error("Error during reconciliation of MinecraftServerGroup: {}", resource.getMetadata().getName(), e);
+        }
 
         return UpdateControl.updateResourceAndPatchStatus(resource);
     }
 
     @Override
     public void delete(MinecraftServerGroup resource, Context<MinecraftServerGroup> context) {
-        Deployment deployment = getDeploymentExist(resource);
-        if(deployment != null) {
-            kubernetesClient.resource(deployment).delete();
+        log.info("Deleting MinecraftServerGroup: {}", resource.getMetadata().getName());
+        List<Pod> pods = getPods(resource);
+        for (Pod pod : pods) {
+            try {
+                log.info("Deleting Pod: {}", pod.getMetadata().getName());
+                kubernetesClient.resource(pod).delete();
+            } catch (Exception e) {
+                log.error("Error deleting Pod: {}", pod.getMetadata().getName(), e);
+            }
         }
     }
 
-    private Deployment ensureDeploymentExists(MinecraftServerGroup resource) {
-        Deployment existingDeployment = getDeploymentExist(resource);
+    private void ensurePodsExist(MinecraftServerGroup resource) {
+        List<Pod> existingPods = getPods(resource);
+        int desiredReplicas = resource.getSpec().getReplicas();
+        int currentReplicas = existingPods.size();
+        Set<String> podNames = existingPods.stream()
+                .map(pod -> pod.getMetadata().getName())
+                .collect(Collectors.toSet());
 
-        if (existingDeployment == null) {
-            log.info("Create MinecraftServerGroup Deployment: %s to %s".formatted(resource.getMetadata().getName(), resource.getMetadata().getNamespace()));
-            return createDeployment(resource);
-        } else {
-            return updateDeploymentIfNeeded(existingDeployment, resource);
+        log.info("Current replicas: {}, Desired replicas: {}", currentReplicas, desiredReplicas);
+
+        if (currentReplicas < desiredReplicas) {
+            int j = 0;
+            for (int i = currentReplicas; i < desiredReplicas && j < desiredReplicas; j++) {
+                if (podNames.contains(getPodName(resource, j))) {
+                    continue;
+                }
+                try {
+                    createPod(resource, j);
+                    log.info("Creating Pod {} of {}", i + 1, desiredReplicas);
+                    i++;
+                } catch (Exception e) {
+                    log.error("Error creating Pod for MinecraftServerGroup: {}", resource.getMetadata().getName(), e);
+                }
+            }
+        } else if (currentReplicas > desiredReplicas) {
+            for (int i = currentReplicas - 1; i >= desiredReplicas; i--) {
+                try {
+                    log.info("Deleting Pod {}", existingPods.get(i).getMetadata().getName());
+                    kubernetesClient.resource(existingPods.get(i)).delete();
+                } catch (Exception e) {
+                    log.error("Error deleting Pod for MinecraftServerGroup: {}", resource.getMetadata().getName(), e);
+                }
+            }
         }
     }
 
-    private Deployment createDeployment(MinecraftServerGroup resource) {
-        Map<String, String> labels = createLabels(resource);
+    private void createPod(MinecraftServerGroup resource, int index) {
+        Map<String, String> labels = createLabels(resource, index);
 
-        Deployment deployment = new DeploymentBuilder()
+        Pod pod = new PodBuilder()
                 .editOrNewMetadata()
-                .withName(resource.getMetadata().getName())
+                .withName(getPodName(resource, index))
                 .withNamespace(resource.getMetadata().getNamespace())
-                .withLabels(labels)
-                .endMetadata()
-                .editOrNewSpec()
-                .withSelector(new LabelSelectorBuilder().withMatchLabels(labels).build())
-                .withReplicas(resource.getSpec().getReplicas())
-                .editOrNewTemplate()
-                .editOrNewMetadata()
                 .withLabels(labels)
                 .endMetadata()
                 .editOrNewSpec()
                 .addAllToContainers(createMinecraftContainers(resource))
                 .endSpec()
-                .endTemplate()
-                .endSpec()
                 .build();
 
-        kubernetesClient.apps().deployments().inNamespace(resource.getMetadata().getNamespace()).create(deployment);
-        return deployment;
+        log.info("Creating Pod: {} in namespace: {}", pod.getMetadata().getName(), pod.getMetadata().getNamespace());
+        kubernetesClient.pods().inNamespace(resource.getMetadata().getNamespace()).create(pod);
     }
 
-
-    private Deployment updateDeploymentIfNeeded(Deployment existingDeployment, MinecraftServerGroup resource) {
-        boolean modified = false;
-        Map<String, String> labels = createLabels(resource);
-
-        if (!existingDeployment.getSpec().getReplicas().equals(resource.getSpec().getReplicas())) {
-            existingDeployment.getSpec().setReplicas(resource.getSpec().getReplicas());
-            modified = true;
-        }
-
-        if (!existingDeployment.getMetadata().getLabels().equals(labels)) {
-            existingDeployment.getMetadata().setLabels(labels);
-            existingDeployment.getSpec().getTemplate().getMetadata().setLabels(labels);
-            existingDeployment.getSpec().setSelector(new LabelSelectorBuilder().withMatchLabels(labels).build());
-            modified = true;
-        }
-
-        // Update the containers if necessary.
-        List<Container> desiredContainers = createMinecraftContainers(resource);
-        if (!existingDeployment.getSpec().getTemplate().getSpec().getContainers().equals(desiredContainers)) {
-            existingDeployment.getSpec().getTemplate().getSpec().setContainers(desiredContainers);
-            modified = true;
-        }
-
-        if (modified) {
-            kubernetesClient.apps().deployments().inNamespace(resource.getMetadata().getNamespace()).replace(existingDeployment);
-        }
-
-        return existingDeployment;
-    }
-
-
-    private Map<String, String> createLabels(MinecraftServerGroup resource) {
+    private Map<String, String> createLabels(MinecraftServerGroup resource, int index) {
         return Map.of(
                 LABEL_APP, resource.getMetadata().getName(),
-                LABEL_GROUP, resource.getMetadata().getName()
+                LABEL_GROUP, resource.getMetadata().getName(),
+                "pod-index", String.valueOf(index)
         );
     }
 
-    private void updateStatus(MinecraftServerGroup resource, Deployment deployment) {
-        Set<String> podIPs = getPodIPsSet(resource);
-        MinecraftServerGroupStatus status = resource.getStatus() == null ? new MinecraftServerGroupStatus() : resource.getStatus();
+    private void updateStatus(MinecraftServerGroup resource) {
+        List<Pod> pods = getPods(resource);
+        Set<String> podIPs = pods.stream()
+                .filter(pod -> "Running".equals(pod.getStatus().getPhase()))
+                .map(pod -> pod.getStatus().getPodIP())
+                .collect(Collectors.toSet());
 
-        status.setPodIPs(List.copyOf(podIPs));
+        log.info("Updating status for MinecraftServerGroup: {}. Pod IPs: {}", resource.getMetadata().getName(), podIPs);
+
+        MinecraftServerGroupStatus status = resource.getStatus() == null ? new MinecraftServerGroupStatus() : resource.getStatus();
+        status.setPodIPs(new ArrayList<>(podIPs));
         status.setState(podIPs.isEmpty() ? "Not Ready" : "Ready");
         resource.setStatus(status);
     }
 
-    public Set<String> getPodIPsSet(MinecraftServerGroup primary) {
-        return kubernetesClient.pods().inNamespace(primary.getMetadata().getNamespace())
-                .withLabel(LABEL_GROUP, primary.getMetadata().getName())
-                .list().getItems().stream()
-                .filter(pod -> "Running".equals(pod.getStatus().getPhase()))
-                .map(pod -> pod.getStatus().getPodIP())
-                .collect(Collectors.toSet());
-    }
-
-    private Deployment getDeploymentExist(MinecraftServerGroup resource) {
-        return kubernetesClient.apps().deployments()
-                .inNamespace(resource.getMetadata().getNamespace())
-                .withName(resource.getMetadata().getName())
-                .get();
+    private List<Pod> getPods(MinecraftServerGroup resource) {
+        List<Pod> pods = kubernetesClient.pods().inNamespace(resource.getMetadata().getNamespace())
+                .withLabel(LABEL_GROUP, resource.getMetadata().getName())
+                .list().getItems();
+        log.info("Found {} pods for MinecraftServerGroup: {}", pods.size(), resource.getMetadata().getName());
+        return pods;
     }
 
     private List<Container> createMinecraftContainers(MinecraftServerGroup resource) {
@@ -179,8 +170,11 @@ public class MinecraftServerGroupController implements Reconciler<MinecraftServe
                 .endResources()
                 .build();
 
+        log.info("Creating container spec for Pod in MinecraftServerGroup: {}", resource.getMetadata().getName());
         return List.of(container);
     }
 
-
+    private String getPodName(MinecraftServerGroup resource, int index) {
+        return resource.getMetadata().getName() + "-" + index;
+    }
 }
