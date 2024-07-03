@@ -1,5 +1,6 @@
 package com.aoldacraft.minecraftkubernetesstack.operator;
 
+import com.aoldacraft.minecraftkubernetesstack.domain.minecraftgroup.services.ServerGroupInfoPublisher;
 import com.aoldacraft.minecraftkubernetesstack.operator.customresources.MinecraftServerGroup;
 import com.aoldacraft.minecraftkubernetesstack.operator.customresources.MinecraftServerGroupStatus;
 import io.fabric8.kubernetes.api.model.*;
@@ -20,14 +21,15 @@ import java.util.stream.Collectors;
 
 @ControllerConfiguration
 public class MinecraftServerGroupController implements Reconciler<MinecraftServerGroup>, EventSourceInitializer<MinecraftServerGroup>, Deleter<MinecraftServerGroup> {
-    private static final String LABEL_APP = "app";
-    private static final String LABEL_GROUP = "minecraftservergroup";
+    public static final String LABEL_GROUP = "minecraftservergroup";
 
     private final Logger log = LoggerFactory.getLogger(MinecraftServerGroupController.class);
     private final KubernetesClient kubernetesClient;
+    private final ServerGroupInfoPublisher serverGroupInfoStreamHandler;
 
-    public MinecraftServerGroupController(KubernetesClient kubernetesClient) {
+    public MinecraftServerGroupController(KubernetesClient kubernetesClient, ServerGroupInfoPublisher service) {
         this.kubernetesClient = kubernetesClient;
+        this.serverGroupInfoStreamHandler = service;
     }
 
     @Override
@@ -35,7 +37,7 @@ public class MinecraftServerGroupController implements Reconciler<MinecraftServe
         final SecondaryToPrimaryMapper<Pod> minecraftServerGroupsMatchingPodLabel =
                 (Pod pod) -> context.getPrimaryCache()
                         .list(minecraftServerGroup -> minecraftServerGroup.getMetadata().getName().equals(
-                                pod.getMetadata().getLabels().get("minecraftservergroup")))
+                                pod.getMetadata().getLabels().get(LABEL_GROUP)))
                         .map(ResourceID::fromResource)
                         .collect(Collectors.toSet());
 
@@ -54,11 +56,11 @@ public class MinecraftServerGroupController implements Reconciler<MinecraftServe
         try {
             ensurePodsExist(resource);
             updateStatus(resource);
+            return UpdateControl.updateResourceAndPatchStatus(resource);
         } catch (Exception e) {
             log.error("Error during reconciliation of MinecraftServerGroup: {}", resource.getMetadata().getName(), e);
         }
-
-        return UpdateControl.updateResourceAndPatchStatus(resource);
+        return UpdateControl.noUpdate();
     }
 
     @Override
@@ -131,7 +133,6 @@ public class MinecraftServerGroupController implements Reconciler<MinecraftServe
 
     private Map<String, String> createLabels(MinecraftServerGroup resource, int index) {
         return Map.of(
-                LABEL_APP, resource.getMetadata().getName(),
                 LABEL_GROUP, resource.getMetadata().getName(),
                 "pod-index", String.valueOf(index)
         );
@@ -150,6 +151,7 @@ public class MinecraftServerGroupController implements Reconciler<MinecraftServe
         status.setPodIPs(new ArrayList<>(podIPs));
         status.setState(podIPs.isEmpty() ? "Not Ready" : "Ready");
         resource.setStatus(status);
+        serverGroupInfoStreamHandler.publishMinecraftServerGroupInfo(resource);
     }
 
     private List<Pod> getPods(MinecraftServerGroup resource) {
