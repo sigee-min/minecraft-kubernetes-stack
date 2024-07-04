@@ -14,7 +14,7 @@ WORKDIR /app
 # Set environment variables
 ENV JAVA_OPTS=""
 ENV MONGO_URL="mongodb://root:1234@localhost:27017/"
-ENV JWT_SECRET="defaultsecretkey"
+ENV JWT_SECRET="defaultsecretkeydefaultsecretkeydefaultsecretkeydefaultsecretkeydefaultsecretkeydefaultsecretkeydefaultsecretkeydefaultsecretkeydefaultsecretkeydefaultsecretkeydefaultsecretkeydefaultsecretkeydefaultsecretkeydefaultsecretkey"
 ENV JWT_EXPIRATION=3600
 ENV SPRING_PROFILES_ACTIVE="local"
 

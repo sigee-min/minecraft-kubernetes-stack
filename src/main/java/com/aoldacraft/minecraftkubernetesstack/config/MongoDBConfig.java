@@ -19,6 +19,7 @@ import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.net.ServerSocket;
 
 @Configuration
 public class MongoDBConfig implements Closeable {
@@ -52,13 +53,21 @@ public class MongoDBConfig implements Closeable {
     @Bean(name = "mongoTemplate")
     @Profile("local")
     public MongoTemplate embeddedMongoTemplate() {
-        final var mongod = Mongod.builder()
-                .net(Start.to(Net.class).initializedWith(Net.defaults().withPort(27017)))
-                .build();
-        final String embeddedMongoUrl = "mongodb://localhost:27017";
-        emMongod = mongod.start(Version.V4_4_5);
-        emMongoClient = MongoClients.create(embeddedMongoUrl);
+        try {
+            ServerSocket socket = new ServerSocket(0);
+            final var mongoPort = socket.getLocalPort();;
+            socket.close();
 
+            final var mongod = Mongod.builder()
+                    .net(Start.to(Net.class).initializedWith(Net.defaults().withPort(mongoPort)))
+                    .build();
+            final String embeddedMongoUrl = "mongodb://localhost:%s".formatted(mongoPort);
+            emMongod = mongod.start(Version.V4_4_5);
+            emMongoClient = MongoClients.create(embeddedMongoUrl);
+        }
+        catch (Exception ignore) {
+
+        }
         return new MongoTemplate(new SimpleMongoClientDatabaseFactory(emMongoClient, databaseName));
     }
 
