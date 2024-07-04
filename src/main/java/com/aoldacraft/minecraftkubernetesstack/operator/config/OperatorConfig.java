@@ -1,9 +1,9 @@
 package com.aoldacraft.minecraftkubernetesstack.operator.config;
 
 import com.aoldacraft.minecraftkubernetesstack.domain.minecraftgroup.services.MinecraftGroupInfoService;
-import com.aoldacraft.minecraftkubernetesstack.operator.MinecraftServerGroupController;
+import com.aoldacraft.minecraftkubernetesstack.operator.minecraftproxy.MinecraftProxyOperator;
+import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.MinecraftServerGroupOperator;
 import io.fabric8.kubernetes.client.KubernetesClient;
-import io.fabric8.kubernetes.client.KubernetesClientBuilder;
 import io.javaoperatorsdk.operator.Operator;
 import io.javaoperatorsdk.operator.api.reconciler.Reconciler;
 import lombok.RequiredArgsConstructor;
@@ -20,10 +20,17 @@ public class OperatorConfig {
     private final KubernetesClient kubernetesClient;
 
     @Bean
-    public MinecraftServerGroupController minecraftServerGroupController() {
-        return new MinecraftServerGroupController(
+    public MinecraftServerGroupOperator minecraftServerGroupController() {
+        return new MinecraftServerGroupOperator(
                 kubernetesClient,
                 minecraftGroupInfoService
+        );
+    }
+
+    @Bean
+    public MinecraftProxyOperator minecraftProxyOperator() {
+        return new MinecraftProxyOperator(
+                kubernetesClient
         );
     }
 

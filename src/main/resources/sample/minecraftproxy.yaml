@@ -1,0 +1,42 @@
+apiVersion: aoldacraft.com/v1alpha1
+kind: MinecraftProxy
+metadata:
+  name: example-minecraftproxy
+spec:
+  replicas: 1
+  resourceRequirements:
+    limits:
+      cpu: "0.1"
+      memory: "1Gi"
+    requests:
+      cpu: "0.1"
+      memory: "1Gi"
+  bind: "0.0.0.0:25565"
+  motd: "Welcome to the Minecraft Proxy Server"
+  showMaxPlayers: 1000
+  onlineMode: true
+  forceKeyAuthentication: true
+  preventClientProxyConnections: false
+  playerInfoForwardingMode: "MODERN"
+  forwardingSecretFile: "forwarding.secret"
+  announceForge: false
+  kickExistingPlayers: false
+  pingPassthrough: "DISABLED"
+  enablePlayerAddressLogging: true
+  compressionThreshold: 256
+  compressionLevel: -1
+  loginRateLimit: 3000
+  connectionTimeout: 5000
+  readTimeout: 30000
+  haproxyProtocol: false
+  tcpFastOpen: false
+  bungeePluginMessageChannel: true
+  showPingRequests: false
+  failoverOnUnexpectedServerDisconnect: true
+  announceProxyCommands: true
+  logCommandExecutions: false
+  logPlayerConnections: true
+  queryEnabled: false
+  queryPort: 25577
+  queryMap: "Velocity"
+  showPlugins: false

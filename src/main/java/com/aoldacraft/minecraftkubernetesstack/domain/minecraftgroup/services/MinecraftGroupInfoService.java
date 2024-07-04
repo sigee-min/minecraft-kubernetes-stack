@@ -5,8 +5,8 @@ import com.aoldacraft.minecraftkubernetesstack.domain.manager.entities.Manager;
 import com.aoldacraft.minecraftkubernetesstack.domain.minecraftgroup.MinecraftServerGroupInfoRepository;
 import com.aoldacraft.minecraftkubernetesstack.domain.minecraftgroup.dto.MinecraftServerGroupDto;
 import com.aoldacraft.minecraftkubernetesstack.domain.minecraftgroup.entities.MinecraftServerGroupInfo;
-import com.aoldacraft.minecraftkubernetesstack.operator.MinecraftServerGroupController;
-import com.aoldacraft.minecraftkubernetesstack.operator.customresources.MinecraftServerGroup;
+import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.MinecraftServerGroupOperator;
+import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.customresources.MinecraftServerGroup;
 import com.aoldacraft.minecraftkubernetesstack.util.SseEmitterHandler;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import lombok.RequiredArgsConstructor;
@@ -80,7 +80,7 @@ public class MinecraftGroupInfoService implements ServerGroupInfoPublisher {
             try {
                 sseEmitter.send(
                         SseEmitter.event()
-                                .name(MinecraftServerGroupController.LABEL_GROUP)
+                                .name(MinecraftServerGroupOperator.LABEL_GROUP)
                                 .data(MinecraftServerGroupDto.builder()
                                                 .name(minecraftServerGroupInfo.getName())
                                                 .serverIps(minecraftServerGroupInfo.getStatus().getPodIPs())
@@ -104,7 +104,7 @@ public class MinecraftGroupInfoService implements ServerGroupInfoPublisher {
             try {
                 sseEmitter.send(
                         SseEmitter.event()
-                                .name(MinecraftServerGroupController.LABEL_GROUP)
+                                .name(MinecraftServerGroupOperator.LABEL_GROUP)
                                 .data(MinecraftServerGroupDto.builder()
                                             .name(resource.getMetadata().getName())
                                             .serverIps(resource.getStatus().getPodIPs())

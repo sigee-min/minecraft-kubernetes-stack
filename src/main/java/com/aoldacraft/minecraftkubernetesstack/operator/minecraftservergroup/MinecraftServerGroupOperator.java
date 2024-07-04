@@ -1,8 +1,8 @@
-package com.aoldacraft.minecraftkubernetesstack.operator;
+package com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup;
 
 import com.aoldacraft.minecraftkubernetesstack.domain.minecraftgroup.services.ServerGroupInfoPublisher;
-import com.aoldacraft.minecraftkubernetesstack.operator.customresources.MinecraftServerGroup;
-import com.aoldacraft.minecraftkubernetesstack.operator.customresources.MinecraftServerGroupStatus;
+import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.customresources.MinecraftServerGroup;
+import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.customresources.MinecraftServerGroupStatus;
 import io.fabric8.kubernetes.api.model.*;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.javaoperatorsdk.operator.api.config.informer.InformerConfiguration;
@@ -20,14 +20,14 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 @ControllerConfiguration
-public class MinecraftServerGroupController implements Reconciler<MinecraftServerGroup>, EventSourceInitializer<MinecraftServerGroup>, Deleter<MinecraftServerGroup> {
+public class MinecraftServerGroupOperator implements Reconciler<MinecraftServerGroup>, EventSourceInitializer<MinecraftServerGroup>, Deleter<MinecraftServerGroup> {
     public static final String LABEL_GROUP = "minecraftservergroup";
 
-    private final Logger log = LoggerFactory.getLogger(MinecraftServerGroupController.class);
+    private final Logger log = LoggerFactory.getLogger(MinecraftServerGroupOperator.class);
     private final KubernetesClient kubernetesClient;
     private final ServerGroupInfoPublisher serverGroupInfoStreamHandler;
 
-    public MinecraftServerGroupController(KubernetesClient kubernetesClient, ServerGroupInfoPublisher service) {
+    public MinecraftServerGroupOperator(KubernetesClient kubernetesClient, ServerGroupInfoPublisher service) {
         this.kubernetesClient = kubernetesClient;
         this.serverGroupInfoStreamHandler = service;
     }

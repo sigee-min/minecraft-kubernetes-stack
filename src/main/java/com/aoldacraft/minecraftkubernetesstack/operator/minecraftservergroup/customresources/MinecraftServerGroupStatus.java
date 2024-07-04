@@ -1,6 +1,5 @@
-package com.aoldacraft.minecraftkubernetesstack.operator.customresources;
+package com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.customresources;
 
-import io.fabric8.kubernetes.client.CustomResource;
 import lombok.Data;
 
 import java.util.List;

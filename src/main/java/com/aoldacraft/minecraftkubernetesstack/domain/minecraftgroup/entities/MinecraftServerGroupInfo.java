@@ -1,14 +1,11 @@
 package com.aoldacraft.minecraftkubernetesstack.domain.minecraftgroup.entities;
 
-import com.aoldacraft.minecraftkubernetesstack.operator.customresources.MinecraftServerGroup;
-import com.aoldacraft.minecraftkubernetesstack.operator.customresources.MinecraftServerGroupSpec;
-import com.aoldacraft.minecraftkubernetesstack.operator.customresources.MinecraftServerGroupStatus;
-import io.fabric8.kubernetes.api.model.ResourceRequirements;
+import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.customresources.MinecraftServerGroup;
+import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.customresources.MinecraftServerGroupSpec;
+import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.customresources.MinecraftServerGroupStatus;
 import lombok.Data;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
-
-import java.util.List;
 
 @Document(collection = "minecraftservergroups")
 @Data
