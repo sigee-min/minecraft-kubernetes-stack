@@ -15,7 +15,7 @@ public class MinecraftProxySpec {
     private boolean forceKeyAuthentication = true;
     private boolean preventClientProxyConnections = false;
     private String playerInfoForwardingMode = "MODERN";
-    private String forwardingSecretFile = "forwarding.secret";
+    private String forwardingSecret = "abcdabcdabcd";
     private boolean announceForge = false;
     private boolean kickExistingPlayers = false;
     private String pingPassthrough = "DISABLED";

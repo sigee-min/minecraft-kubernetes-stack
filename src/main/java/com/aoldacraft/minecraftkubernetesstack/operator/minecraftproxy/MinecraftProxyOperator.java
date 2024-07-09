@@ -24,7 +24,7 @@ import java.util.stream.Collectors;
 @ControllerConfiguration
 public class MinecraftProxyOperator implements Reconciler<MinecraftProxy>, EventSourceInitializer<MinecraftProxy>, Deleter<MinecraftProxy> {
   public static final String LABEL_GROUP = "minecraftproxy";
-  private static final String PROXY_IMAGE = "ghcr.io/sigee-min/sigee-min/velocity-for-kubernetes:fd9ec1e";
+  private static final String PROXY_IMAGE = "velocity:latest";// "ghcr.io/sigee-min/sigee-min/velocity-for-kubernetes:eec155d";
   private final Logger log = LoggerFactory.getLogger(MinecraftProxyOperator.class);
   private final KubernetesClient kubernetesClient;
 
@@ -167,7 +167,7 @@ public class MinecraftProxyOperator implements Reconciler<MinecraftProxy>, Event
     String operatorHostAddress = "localhost";
     try {
       InetAddress inetAddress = InetAddress.getLocalHost();
-      operatorHostAddress = inetAddress.getHostAddress();
+      operatorHostAddress = "192.168.0.8"; //inetAddress.getHostAddress();
     } catch (UnknownHostException e) {
       log.error("Failed to get host address", e);
     }
@@ -182,7 +182,7 @@ public class MinecraftProxyOperator implements Reconciler<MinecraftProxy>, Event
             new EnvVar("FORCE_KEY_AUTHENTICATION", String.valueOf(spec.isForceKeyAuthentication()), null),
             new EnvVar("PREVENT_CLIENT_PROXY_CONNECTIONS", String.valueOf(spec.isPreventClientProxyConnections()), null),
             new EnvVar("PLAYER_INFO_FORWARDING_MODE", spec.getPlayerInfoForwardingMode(), null),
-            new EnvVar("FORWARDING_SECRET_FILE", spec.getForwardingSecretFile(), null),
+            new EnvVar("VELOCITY_FORWARDING_SECRET", spec.getForwardingSecret(), null),
             new EnvVar("ANNOUNCE_FORGE", String.valueOf(spec.isAnnounceForge()), null),
             new EnvVar("KICK_EXISTING_PLAYERS", String.valueOf(spec.isKickExistingPlayers()), null),
             new EnvVar("PING_PASSTHROUGH", spec.getPingPassthrough(), null),
