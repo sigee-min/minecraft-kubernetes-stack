@@ -10,4 +10,5 @@ import java.util.List;
 public class MinecraftServerGroupDto {
     String name;
     List<String> serverIps;
+    Boolean isForce;
 }

@@ -11,7 +11,7 @@ spec:
     requests:
       cpu: "0.5"
       memory: "1Gi"
-  bind: "0.0.0.0:25565"
+  port: 25565
   motd: "Welcome to the Minecraft Proxy Server"
   showMaxPlayers: 1000
   onlineMode: true

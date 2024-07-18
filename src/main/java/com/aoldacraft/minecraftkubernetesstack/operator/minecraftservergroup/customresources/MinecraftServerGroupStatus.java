@@ -8,4 +8,5 @@ import java.util.List;
 public class MinecraftServerGroupStatus {
     private String state;
     private List<String> podIPs;
+    private Long observedGeneration;
 }

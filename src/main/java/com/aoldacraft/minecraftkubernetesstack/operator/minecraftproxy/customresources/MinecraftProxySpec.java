@@ -7,8 +7,7 @@ import lombok.Data;
 public class MinecraftProxySpec {
     private int replicas=1;
     private ResourceRequirements resourceRequirements;
-
-    private String bind = "0.0.0.0:25565";
+    private Integer port = 25565;
     private String motd = "<#09add3>A Velocity Server";
     private int showMaxPlayers = 500;
     private boolean onlineMode = true;

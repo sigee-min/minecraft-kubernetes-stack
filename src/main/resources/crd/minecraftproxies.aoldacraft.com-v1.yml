@@ -23,8 +23,6 @@ spec:
                 type: boolean
               announceProxyCommands:
                 type: boolean
-              bind:
-                type: string
               bungeePluginMessageChannel:
                 type: boolean
               compressionLevel:
@@ -59,6 +57,8 @@ spec:
                 type: string
               playerInfoForwardingMode:
                 type: string
+              port:
+                type: integer
               preventClientProxyConnections:
                 type: boolean
               queryEnabled:
@@ -106,6 +106,8 @@ spec:
             type: object
           status:
             properties:
+              observedGeneration:
+                type: integer
               podIPs:
                 items:
                   type: string

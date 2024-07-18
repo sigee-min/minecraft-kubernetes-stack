@@ -18,7 +18,7 @@ public class MinecraftGroupInfoController {
 
     private final MinecraftGroupInfoService minecraftGroupService;
     private final SseEmitterHandler sseEmitters;
-
+    private static final long TIMEOUT = 30 * 60 * 1000;
     @GetMapping
     public ResponseEntity<List<MinecraftServerGroupInfo>> getAllGroups() {
         return ResponseEntity.ok(minecraftGroupService.getAllGroups());
@@ -31,7 +31,7 @@ public class MinecraftGroupInfoController {
 
     @GetMapping(value = "/connect", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public ResponseEntity<SseEmitter> connect() {
-        SseEmitter emitter = new SseEmitter();
+        SseEmitter emitter = new SseEmitter(TIMEOUT);
         sseEmitters.add(emitter);
         minecraftGroupService.publishMinecraftServerGroupInfoInit(emitter);
         return ResponseEntity.ok(emitter);
