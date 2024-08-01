@@ -1,5 +1,6 @@
 package com.aoldacraft.minecraftkubernetesstack.operator.minecraftproxy.customresources;
 
+import com.aoldacraft.minecraftkubernetesstack.operator.minecraftproxy.utils.ProxyPodUtil;
 import io.fabric8.kubernetes.api.model.ResourceRequirements;
 import lombok.Data;
 
@@ -14,7 +15,7 @@ public class MinecraftProxySpec {
     private boolean forceKeyAuthentication = true;
     private boolean preventClientProxyConnections = false;
     private String playerInfoForwardingMode = "MODERN";
-    private String forwardingSecret = "abcdabcdabcd";
+    private String forwardingSecret = ProxyPodUtil.SECRET;
     private boolean announceForge = false;
     private boolean kickExistingPlayers = false;
     private String pingPassthrough = "DISABLED";

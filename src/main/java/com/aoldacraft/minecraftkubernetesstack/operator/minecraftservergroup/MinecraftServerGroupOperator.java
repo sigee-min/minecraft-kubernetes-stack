@@ -1,11 +1,10 @@
 package com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup;
 
 import com.aoldacraft.minecraftkubernetesstack.domain.minecraftgroup.services.ServerGroupInfoPublisher;
+import com.aoldacraft.minecraftkubernetesstack.operator.minecraftproxy.utils.ProxyPodUtil;
 import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.customresources.MinecraftServerGroup;
 import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.customresources.MinecraftServerGroupSpec;
 import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.customresources.MinecraftServerGroupStatus;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.fabric8.kubernetes.api.model.*;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.javaoperatorsdk.operator.api.config.informer.InformerConfiguration;
@@ -18,13 +17,24 @@ import io.javaoperatorsdk.operator.processing.event.source.SecondaryToPrimaryMap
 import io.javaoperatorsdk.operator.processing.event.source.informer.InformerEventSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.yaml.snakeyaml.DumperOptions;
+import org.yaml.snakeyaml.Yaml;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.*;
 import java.util.stream.Collectors;
 
+/**
+ * The MinecraftServerGroupOperator class is responsible for managing a Minecraft Server Group in Kubernetes.
+ * It implements the Reconciler, EventSourceInitializer, and Deleter interfaces.
+ */
 @ControllerConfiguration
 public class MinecraftServerGroupOperator implements Reconciler<MinecraftServerGroup>, EventSourceInitializer<MinecraftServerGroup>, Deleter<MinecraftServerGroup> {
     public static final String LABEL_GROUP = "minecraftservergroup";
+    private static final String INIT_IMAGE = "ghcr.io/sigee-min/sigee-min/minecraft-kubernetes-stack-init-container:3cbedc6";
 
     private final Logger log = LoggerFactory.getLogger(MinecraftServerGroupOperator.class);
     private final KubernetesClient kubernetesClient;
@@ -57,6 +67,13 @@ public class MinecraftServerGroupOperator implements Reconciler<MinecraftServerG
         log.info("Reconciling MinecraftServerGroup: {}", resource.getMetadata().getName());
 
         try {
+            boolean specChanged = !Objects.equals(resource.getMetadata().getGeneration(), resource.getStatus().getObservedGeneration());
+            if (specChanged) {
+                log.info("Changed MinecraftServerGroup: {}", resource.getMetadata().getName());
+                delete(resource, context);
+                updateStatus(resource);
+            }
+            createOrUpdateConfigMap(resource);
             ensurePodsExist(resource);
             updateStatus(resource);
             return UpdateControl.updateResourceAndPatchStatus(resource);
@@ -78,6 +95,7 @@ public class MinecraftServerGroupOperator implements Reconciler<MinecraftServerG
                 log.error("Error deleting Pod: {}", pod.getMetadata().getName(), e);
             }
         }
+        deleteConfigMap(resource);
     }
 
     private void ensurePodsExist(MinecraftServerGroup resource) {
@@ -126,7 +144,18 @@ public class MinecraftServerGroupOperator implements Reconciler<MinecraftServerG
                 .withLabels(labels)
                 .endMetadata()
                 .editOrNewSpec()
+                .addAllToInitContainers(createInitContainers(resource))
                 .addAllToContainers(createMinecraftContainers(resource))
+                .addNewVolume()
+                .withName("config-volume")
+                .withEmptyDir(new EmptyDirVolumeSource())
+                .endVolume()
+                .addNewVolume()
+                .withName("config-tmp-volume")
+                .withNewConfigMap()
+                .withName(getConfigMapName(resource))
+                .endConfigMap()
+                .endVolume()
                 .endSpec()
                 .build();
 
@@ -151,6 +180,7 @@ public class MinecraftServerGroupOperator implements Reconciler<MinecraftServerG
         log.info("Updating status for MinecraftServerGroup: {}. Pod IPs: {}", resource.getMetadata().getName(), podIPs);
 
         MinecraftServerGroupStatus status = resource.getStatus() == null ? new MinecraftServerGroupStatus() : resource.getStatus();
+        status.setObservedGeneration(resource.getMetadata().getGeneration());
         status.setPodIPs(new ArrayList<>(podIPs));
         status.setState(podIPs.isEmpty() ? "Not Ready" : "Ready");
         resource.setStatus(status);
@@ -165,31 +195,140 @@ public class MinecraftServerGroupOperator implements Reconciler<MinecraftServerG
         return pods;
     }
 
+    private List<Container> createInitContainers(MinecraftServerGroup resource) {
+        Container initContainer = new ContainerBuilder()
+                .withName("init-copy-config")
+                .withImage(INIT_IMAGE)
+                .withVolumeMounts(
+                        new VolumeMountBuilder()
+                                .withName("config-volume")
+                                .withMountPath("/data/config")
+                                .build(),
+                        new VolumeMountBuilder()
+                                .withName("config-tmp-volume")
+                                .withMountPath("/data/config-tmp")
+                                .build()
+                )
+                .build();
+
+        log.info("Creating init container for Pod in MinecraftServerGroup: {}", resource.getMetadata().getName());
+        return List.of(initContainer);
+    }
+
+
     private List<Container> createMinecraftContainers(MinecraftServerGroup resource) {
         MinecraftServerGroupSpec spec = resource.getSpec();
-        ObjectMapper mapper = new ObjectMapper();
-
-        String modsJson = "[]";
-        String pluginsJson = "[]";
-
-        try {
-            modsJson = mapper.writeValueAsString(spec.getMods());
-            pluginsJson = mapper.writeValueAsString(spec.getPlugins());
-        } catch (JsonProcessingException e) {
-            log.error("Failed to convert mods or plugins list to JSON", e);
-        }
-
         Container container = new ContainerBuilder()
                 .withName("minecraft")
                 .withImage("itzg/minecraft-server:latest")
                 .withEnv(
-
-                        new EnvVar("TYPE", "SPIGOT", null),
+                        new EnvVar("TYPE", "PAPER", null),
                         new EnvVar("EULA", spec.getEula() != null ? spec.getEula().toString() : "false", null),
-                        new EnvVar("MODS", modsJson, null),
-                        new EnvVar("PLUGINS", pluginsJson, null),
-                        new EnvVar("WORLD", spec.getWorld(), null)  // New environment variable for world
-                        /*=
+                        new EnvVar("ONLINE_MODE", "false", null),
+                        new EnvVar("VERSION", spec.getVersion() != null ? spec.getVersion() : "LATEST", null)
+                )
+                .withPorts(new ContainerPortBuilder().withContainerPort(25565).build())
+                .withVolumeMounts(
+                        new VolumeMountBuilder()
+                                .withName("config-volume")
+                                .withMountPath("/data/config")
+                                .withReadOnly(false)
+                                .build()
+                )
+                .withNewResourcesLike(resource.getSpec().getResourceRequirements())
+                .endResources()
+                .build();
+
+        log.info("Creating container spec for Pod in MinecraftServerGroup: {}", resource.getMetadata().getName());
+        return List.of(container);
+    }
+
+    private void createOrUpdateConfigMap(MinecraftServerGroup resource) {
+        ConfigMap cm = kubernetesClient.configMaps()
+                .inNamespace(resource.getMetadata().getNamespace())
+                .withName(getConfigMapName(resource))
+                .get();
+
+        if(cm == null) {
+            return;
+        }
+
+        String spigotYml = downloadFile("https://raw.githubusercontent.com/dayyeeet/minecraft-default-configs/main/%s/spigot.yml".formatted(resource.getSpec().getVersion()));
+        String paperGlobalYml = downloadFile("https://raw.githubusercontent.com/dayyeeet/minecraft-default-configs/main/%s/paper-global.yml".formatted(resource.getSpec().getVersion()));
+        String paperWorldYml = downloadFile("https://raw.githubusercontent.com/dayyeeet/minecraft-default-configs/main/%s/paper-world-defaults.yml".formatted(resource.getSpec().getVersion()));
+
+        Yaml yaml = new Yaml();
+        Map<String, Object> paperGlobalConfig = yaml.load(paperGlobalYml);
+        Map<String, Object> proxies = (Map<String, Object>) paperGlobalConfig.get("proxies");
+        if (proxies != null) {
+            Map<String, Object> velocity = (Map<String, Object>) proxies.get("velocity");
+            if (velocity != null) {
+                velocity.put("enabled", true);
+                velocity.put("online-mode", false);
+                velocity.put("secret", ProxyPodUtil.SECRET);
+            }
+        }
+
+        DumperOptions options = new DumperOptions();
+        options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
+        Yaml modifiedYaml = new Yaml(options);
+        String modifiedPaperGlobalYml = modifiedYaml.dump(paperGlobalConfig);
+
+        ConfigMap configMap = new ConfigMapBuilder()
+                .withNewMetadata()
+                .withName(getConfigMapName(resource))
+                .withNamespace(resource.getMetadata().getNamespace())
+                .endMetadata()
+                .addToData("spigot.yml", spigotYml)
+                .addToData("paper-global.yml", modifiedPaperGlobalYml)
+                .addToData("paper-world-defaults.yml", paperWorldYml)
+                .build();
+
+        kubernetesClient.configMaps()
+                .inNamespace(resource.getMetadata().getNamespace())
+                .createOrReplace(configMap);
+        log.info("Created/Updated ConfigMap for MinecraftServerGroup: {}", resource.getMetadata().getName());
+    }
+
+
+    private String downloadFile(String fileURL) {
+        StringBuilder content = new StringBuilder();
+        try {
+            URL url = new URL(fileURL);
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("GET");
+
+            try (BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()))) {
+                content.append(in.lines().collect(Collectors.joining("\n")));
+            }
+        } catch (Exception e) {
+            log.error("Error downloading file from URL: {}", fileURL, e);
+        }
+        return content.toString();
+    }
+
+    private void deleteConfigMap(MinecraftServerGroup resource) {
+        kubernetesClient.configMaps()
+                .inNamespace(resource.getMetadata().getNamespace())
+                .withName("minecraft-config-" + resource.getMetadata().getName())
+                .delete();
+        log.info("Deleted ConfigMap for MinecraftServerGroup: {}", resource.getMetadata().getName());
+    }
+
+    private String getPodName(MinecraftServerGroup resource, int index) {
+        return resource.getMetadata().getName() + "-" + index;
+    }
+
+    private String getConfigMapName(MinecraftServerGroup resource) {
+        return "minecraft-config-" + resource.getMetadata().getName();
+    }
+}
+
+
+//new EnvVar("MODS", modsJson, null),
+//new EnvVar("PLUGINS", pluginsJson, null),
+//new EnvVar("WORLD", spec.getWorld(), null),  // New environment variable for world
+/*=
                         new EnvVar("MEMORY", spec.getMemory() != null ? spec.getMemory() : "1024M", null),
                         new EnvVar("INIT_MEMORY", spec.getInitMemory() != null ? spec.getInitMemory() : "512M", null),
                         new EnvVar("MAX_MEMORY", spec.getMaxMemory() != null ? spec.getMaxMemory() : "1024M", null),
@@ -203,7 +342,6 @@ public class MinecraftServerGroupOperator implements Reconciler<MinecraftServerG
                         new EnvVar("EXTRA_ARGS", spec.getExtraArgs() != null ? spec.getExtraArgs() : "", null),
                         new EnvVar("LOG_TIMESTAMP", spec.getLogTimestamp() != null ? spec.getLogTimestamp().toString() : "true", null),
 
-                        new EnvVar("VERSION", spec.getVersion() != null ? spec.getVersion() : "LATEST", null),
                         new EnvVar("MOTD", spec.getMotd() != null ? spec.getMotd() : "A Minecraft Server", null),
                         new EnvVar("DIFFICULTY", spec.getDifficulty() != null ? spec.getDifficulty() : "easy", null),
                         new EnvVar("ICON", spec.getIcon() != null ? spec.getIcon() : "", null),
@@ -229,7 +367,6 @@ public class MinecraftServerGroupOperator implements Reconciler<MinecraftServerG
                         new EnvVar("LEVEL_TYPE", spec.getLevelType() != null ? spec.getLevelType() : "DEFAULT", null),
                         new EnvVar("GENERATOR_SETTINGS", spec.getGeneratorSettings() != null ? spec.getGeneratorSettings() : "", null),
                         new EnvVar("LEVEL", spec.getLevel() != null ? spec.getLevel() : "world", null),
-                        new EnvVar("ONLINE_MODE", "false", null),
                         new EnvVar("ALLOW_FLIGHT", spec.getAllowFlight() != null ? spec.getAllowFlight().toString() : "false", null),
                         new EnvVar("SERVER_NAME", spec.getServerName() != null ? spec.getServerName() : "", null),
                         new EnvVar("SERVER_PORT", spec.getServerPort() != null ? spec.getServerPort().toString() : "25565", null),
@@ -284,17 +421,3 @@ public class MinecraftServerGroupOperator implements Reconciler<MinecraftServerG
                         new EnvVar("AUTOSTOP_TIMEOUT_INIT", spec.getAutostopTimeoutInit() != null ? spec.getAutostopTimeoutInit().toString() : "600", null),
                         new EnvVar("AUTOSTOP_PERIOD", spec.getAutostopPeriod() != null ? spec.getAutostopPeriod().toString() : "60", null),
                         new EnvVar("DEBUG_AUTOSTOP", spec.getDebugAutostop() != null ? spec.getDebugAutostop().toString() : "false", null),*/
-                )
-                .withPorts(new ContainerPortBuilder().withContainerPort(25565).build())
-                .withNewResourcesLike(resource.getSpec().getResourceRequirements())
-                .endResources()
-                .build();
-
-        log.info("Creating container spec for Pod in MinecraftServerGroup: {}", resource.getMetadata().getName());
-        return List.of(container);
-    }
-
-    private String getPodName(MinecraftServerGroup resource, int index) {
-        return resource.getMetadata().getName() + "-" + index;
-    }
-}

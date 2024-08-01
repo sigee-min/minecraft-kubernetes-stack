@@ -18,7 +18,7 @@ public class MinecraftGroupInfoController {
 
     private final MinecraftGroupInfoService minecraftGroupService;
     private final SseEmitterHandler sseEmitters;
-    private static final long TIMEOUT = 30 * 60 * 1000;
+    private static final long TIMEOUT = 3 * 60 * 1000;
     @GetMapping
     public ResponseEntity<List<MinecraftServerGroupInfo>> getAllGroups() {
         return ResponseEntity.ok(minecraftGroupService.getAllGroups());

@@ -182,17 +182,31 @@ public class MinecraftGroupInfoService implements ServerGroupInfoPublisher {
     public MinecraftServerGroupInfo syncServerGroup(String name, String namespace) {
         log.info("Syncing individual server group with Kubernetes: {}", name);
         MinecraftServerGroup k8sGroup = kubernetesClient.resources(MinecraftServerGroup.class).inNamespace(namespace).withName(name).get();
+        log.debug("Retrieved Kubernetes server group: {}", k8sGroup);
+
         MinecraftServerGroupInfo dbGroup = groupRepository.findByNameAndNamespace(name, namespace).orElseGet(() -> {
             log.info("Group not found in database, creating new entry: {}", name);
-            return groupRepository.save(MinecraftServerGroupInfo.makeFromCRD(k8sGroup));
+            MinecraftServerGroupInfo newGroup = MinecraftServerGroupInfo.makeFromCRD(k8sGroup);
+            log.debug("New group created from CRD: {}", newGroup);
+            return groupRepository.save(newGroup);
         });
+        log.debug("Database group info: {}", dbGroup);
 
-        if (dbGroup.getStatus().getPodIPs().hashCode() == k8sGroup.getStatus().getPodIPs().hashCode()) {
-            return dbGroup;
+        try {
+            if (dbGroup.getStatus().getPodIPs().hashCode() == k8sGroup.getStatus().getPodIPs().hashCode()) {
+                log.info("No changes detected in group status, returning existing group: {}", name);
+                return dbGroup;
+            }
+        } catch (Exception exception) {
+            log.error("Error comparing group statuses for {}: {}", name, exception.getMessage());
         }
+
         log.info("Updating group status in database: {}", name);
         dbGroup.setStatus(k8sGroup.getStatus());
-        groupRepository.save(dbGroup);
-        return dbGroup;
+        MinecraftServerGroupInfo updatedGroup = groupRepository.save(dbGroup);
+        log.debug("Updated group info: {}", updatedGroup);
+
+        return updatedGroup;
     }
+
 }

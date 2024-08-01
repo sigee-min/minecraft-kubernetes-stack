@@ -91,6 +91,8 @@ spec:
                 type: string
               initMemory:
                 type: string
+              isForce:
+                type: boolean
               jmxHost:
                 type: string
               jvmDdOpts:
@@ -236,6 +238,8 @@ spec:
             type: object
           status:
             properties:
+              observedGeneration:
+                type: integer
               podIPs:
                 items:
                   type: string

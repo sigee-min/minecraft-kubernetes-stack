@@ -14,7 +14,8 @@ import java.util.stream.Collectors;
 
 public class ProxyPodUtil {
   private static final Logger log = LoggerFactory.getLogger(ProxyPodUtil.class);
-  private static final String PROXY_IMAGE = "ghcr.io/sigee-min/sigee-min/velocity-for-kubernetes:testv5";
+  private static final String PROXY_IMAGE = "ghcr.io/sigee-min/sigee-min/velocity-for-kubernetes:cc6a0b1";
+  public static final String SECRET = "abcdabcdabcd";
 
   public static void ensurePodsExist(KubernetesClient kubernetesClient, MinecraftProxy resource) {
     List<Pod> existingPods = getPods(kubernetesClient, resource);
