@@ -1,15 +1,15 @@
 apiVersion: aoldacraft.com/v1alpha1
 kind: MinecraftProxy
 metadata:
-  name: example-minecraftproxy
+  name: velocity
 spec:
   replicas: 1
   resourceRequirements:
     limits:
-      cpu: "0.5"
+      cpu: "0.6"
       memory: "1Gi"
     requests:
-      cpu: "0.5"
+      cpu: "0.6"
       memory: "1Gi"
   port: 25565
   motd: "Welcome to the Minecraft Proxy Server"

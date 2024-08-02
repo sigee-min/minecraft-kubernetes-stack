@@ -1,10 +1,14 @@
 package com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup;
 
 import com.aoldacraft.minecraftkubernetesstack.domain.minecraftgroup.services.ServerGroupInfoPublisher;
-import com.aoldacraft.minecraftkubernetesstack.operator.minecraftproxy.utils.ProxyPodUtil;
 import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.customresources.MinecraftServerGroup;
 import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.customresources.MinecraftServerGroupSpec;
 import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.customresources.MinecraftServerGroupStatus;
+import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.statics.InitFile;
+import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.statics.ServerData;
+import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.utils.ResourceUtil;
+import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.utils.ServerConfigUtil;
+import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.utils.ServerPodUtil;
 import io.fabric8.kubernetes.api.model.*;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.javaoperatorsdk.operator.api.config.informer.InformerConfiguration;
@@ -13,17 +17,10 @@ import io.javaoperatorsdk.operator.api.reconciler.Context;
 import io.javaoperatorsdk.operator.api.reconciler.dependent.Deleter;
 import io.javaoperatorsdk.operator.processing.event.ResourceID;
 import io.javaoperatorsdk.operator.processing.event.source.EventSource;
-import io.javaoperatorsdk.operator.processing.event.source.SecondaryToPrimaryMapper;
 import io.javaoperatorsdk.operator.processing.event.source.informer.InformerEventSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.yaml.snakeyaml.DumperOptions;
-import org.yaml.snakeyaml.Yaml;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -32,295 +29,85 @@ import java.util.stream.Collectors;
  * It implements the Reconciler, EventSourceInitializer, and Deleter interfaces.
  */
 @ControllerConfiguration
-public class MinecraftServerGroupOperator implements Reconciler<MinecraftServerGroup>, EventSourceInitializer<MinecraftServerGroup>, Deleter<MinecraftServerGroup> {
-    public static final String LABEL_GROUP = "minecraftservergroup";
-    private static final String INIT_IMAGE = "ghcr.io/sigee-min/sigee-min/minecraft-kubernetes-stack-init-container:3cbedc6";
-
+public class MinecraftServerGroupOperator implements Reconciler<MinecraftServerGroup>, EventSourceInitializer<MinecraftServerGroup>, Cleaner<MinecraftServerGroup> {
     private final Logger log = LoggerFactory.getLogger(MinecraftServerGroupOperator.class);
     private final KubernetesClient kubernetesClient;
     private final ServerGroupInfoPublisher serverGroupInfoStreamHandler;
+    private final ServerPodUtil serverPodUtil;
+    private final ServerConfigUtil serverConfigUtil;
 
     public MinecraftServerGroupOperator(KubernetesClient kubernetesClient, ServerGroupInfoPublisher service) {
         this.kubernetesClient = kubernetesClient;
         this.serverGroupInfoStreamHandler = service;
+        this.serverPodUtil = new ServerPodUtil(kubernetesClient);
+        this.serverConfigUtil = new ServerConfigUtil(kubernetesClient);
     }
 
     @Override
     public Map<String, EventSource> prepareEventSources(EventSourceContext<MinecraftServerGroup> context) {
-        final SecondaryToPrimaryMapper<Pod> minecraftServerGroupsMatchingPodLabel =
-                (Pod pod) -> context.getPrimaryCache()
-                        .list(minecraftServerGroup -> minecraftServerGroup.getMetadata().getName().equals(
-                                pod.getMetadata().getLabels().get(LABEL_GROUP)))
-                        .map(ResourceID::fromResource)
-                        .collect(Collectors.toSet());
-
-        InformerConfiguration<Pod> configuration =
+        final InformerConfiguration<Pod> configurationPod =
                 InformerConfiguration.from(Pod.class, context)
-                        .withSecondaryToPrimaryMapper(minecraftServerGroupsMatchingPodLabel)
-                        .build();
+                        .withSecondaryToPrimaryMapper(
+                                (Pod pod) -> context.getPrimaryCache()
+                                        .list(minecraftServerGroup -> minecraftServerGroup.getMetadata().getName()
+                                                .equals(pod.getMetadata().getLabels().get(ServerData.LABEL_GROUP)))
+                                        .map(ResourceID::fromResource)
+                                        .collect(Collectors.toSet())).build();
 
-        return EventSourceInitializer.nameEventSources(new InformerEventSource<>(configuration, context));
+        final InformerConfiguration<ConfigMap> configurationConfigMap =
+                InformerConfiguration.from(ConfigMap.class, context)
+                        .withSecondaryToPrimaryMapper(
+                                (ConfigMap configMap) -> context.getPrimaryCache()
+                                        .list(minecraftServerGroup -> minecraftServerGroup.getMetadata().getName()
+                                                .equals(configMap.getMetadata().getLabels().get(ServerData.LABEL_GROUP)))
+                                        .map(ResourceID::fromResource)
+                                        .collect(Collectors.toSet())).build();
+
+        return EventSourceInitializer.nameEventSources(
+                new InformerEventSource<>(configurationPod, context),
+                new InformerEventSource<>(configurationConfigMap, context)
+        );
     }
 
     @Override
     public UpdateControl<MinecraftServerGroup> reconcile(MinecraftServerGroup resource, Context<MinecraftServerGroup> context) {
         log.info("Reconciling MinecraftServerGroup: {}", resource.getMetadata().getName());
-
         try {
-            boolean specChanged = !Objects.equals(resource.getMetadata().getGeneration(), resource.getStatus().getObservedGeneration());
+            final var tmpConfigMap = serverConfigUtil.getConfigMap(resource);
+            boolean specChanged = resource.getStatus() == null ||
+                    !Objects.equals(resource.getMetadata().getGeneration(), resource.getStatus().getObservedGeneration()) ||
+                    tmpConfigMap == null || !Objects.equals(tmpConfigMap.getMetadata().getGeneration(), resource.getStatus().getConfigMapObservedGeneration());
             if (specChanged) {
                 log.info("Changed MinecraftServerGroup: {}", resource.getMetadata().getName());
-                delete(resource, context);
+                serverPodUtil.delete(resource);
                 updateStatus(resource);
             }
-            createOrUpdateConfigMap(resource);
-            ensurePodsExist(resource);
+            Boolean serverUpdated = serverPodUtil.sync(resource);
+            Boolean configUpdated = serverConfigUtil.sync(resource);
             updateStatus(resource);
-            return UpdateControl.updateResourceAndPatchStatus(resource);
+            if (configUpdated || serverUpdated || specChanged) {
+                return UpdateControl.updateResourceAndPatchStatus(resource);
+            }
         } catch (Exception e) {
             log.error("Error during reconciliation of MinecraftServerGroup: {}", resource.getMetadata().getName(), e);
         }
         return UpdateControl.noUpdate();
     }
 
-    @Override
-    public void delete(MinecraftServerGroup resource, Context<MinecraftServerGroup> context) {
-        log.info("Deleting MinecraftServerGroup: {}", resource.getMetadata().getName());
-        List<Pod> pods = getPods(resource);
-        for (Pod pod : pods) {
-            try {
-                log.info("Deleting Pod: {}", pod.getMetadata().getName());
-                kubernetesClient.resource(pod).delete();
-            } catch (Exception e) {
-                log.error("Error deleting Pod: {}", pod.getMetadata().getName(), e);
-            }
-        }
-        deleteConfigMap(resource);
-    }
-
-    private void ensurePodsExist(MinecraftServerGroup resource) {
-        List<Pod> existingPods = getPods(resource);
-        int desiredReplicas = resource.getSpec().getReplicas();
-        int currentReplicas = existingPods.size();
-        Set<String> podNames = existingPods.stream()
-                .map(pod -> pod.getMetadata().getName())
-                .collect(Collectors.toSet());
-
-        log.info("Current replicas: {}, Desired replicas: {}", currentReplicas, desiredReplicas);
-
-        if (currentReplicas < desiredReplicas) {
-            int j = 0;
-            for (int i = currentReplicas; i < desiredReplicas && j < desiredReplicas; j++) {
-                if (podNames.contains(getPodName(resource, j))) {
-                    continue;
-                }
-                try {
-                    createPod(resource, j);
-                    log.info("Creating Pod {} of {}", i + 1, desiredReplicas);
-                    i++;
-                } catch (Exception e) {
-                    log.error("Error creating Pod for MinecraftServerGroup: {}", resource.getMetadata().getName(), e);
-                }
-            }
-        } else if (currentReplicas > desiredReplicas) {
-            for (int i = currentReplicas - 1; i >= desiredReplicas; i--) {
-                try {
-                    log.info("Deleting Pod {}", existingPods.get(i).getMetadata().getName());
-                    kubernetesClient.resource(existingPods.get(i)).delete();
-                } catch (Exception e) {
-                    log.error("Error deleting Pod for MinecraftServerGroup: {}", resource.getMetadata().getName(), e);
-                }
-            }
-        }
-    }
-
-    private void createPod(MinecraftServerGroup resource, int index) {
-        Map<String, String> labels = createLabels(resource, index);
-
-        Pod pod = new PodBuilder()
-                .editOrNewMetadata()
-                .withName(getPodName(resource, index))
-                .withNamespace(resource.getMetadata().getNamespace())
-                .withLabels(labels)
-                .endMetadata()
-                .editOrNewSpec()
-                .addAllToInitContainers(createInitContainers(resource))
-                .addAllToContainers(createMinecraftContainers(resource))
-                .addNewVolume()
-                .withName("config-volume")
-                .withEmptyDir(new EmptyDirVolumeSource())
-                .endVolume()
-                .addNewVolume()
-                .withName("config-tmp-volume")
-                .withNewConfigMap()
-                .withName(getConfigMapName(resource))
-                .endConfigMap()
-                .endVolume()
-                .endSpec()
-                .build();
-
-        log.info("Creating Pod: {} in namespace: {}", pod.getMetadata().getName(), pod.getMetadata().getNamespace());
-        kubernetesClient.pods().inNamespace(resource.getMetadata().getNamespace()).create(pod);
-    }
-
-    private Map<String, String> createLabels(MinecraftServerGroup resource, int index) {
-        return Map.of(
-                LABEL_GROUP, resource.getMetadata().getName(),
-                "pod-index", String.valueOf(index)
-        );
-    }
-
     private void updateStatus(MinecraftServerGroup resource) {
-        List<Pod> pods = getPods(resource);
-        Set<String> podIPs = pods.stream()
-                .filter(pod -> "Running".equals(pod.getStatus().getPhase()))
-                .map(pod -> pod.getStatus().getPodIP())
-                .collect(Collectors.toSet());
-
-        log.info("Updating status for MinecraftServerGroup: {}. Pod IPs: {}", resource.getMetadata().getName(), podIPs);
-
         MinecraftServerGroupStatus status = resource.getStatus() == null ? new MinecraftServerGroupStatus() : resource.getStatus();
-        status.setObservedGeneration(resource.getMetadata().getGeneration());
-        status.setPodIPs(new ArrayList<>(podIPs));
-        status.setState(podIPs.isEmpty() ? "Not Ready" : "Ready");
+        serverPodUtil.updateStatus(resource, status);
+        serverConfigUtil.updateStatus(resource, status);
         resource.setStatus(status);
         serverGroupInfoStreamHandler.publishMinecraftServerGroupInfo(resource);
     }
 
-    private List<Pod> getPods(MinecraftServerGroup resource) {
-        List<Pod> pods = kubernetesClient.pods().inNamespace(resource.getMetadata().getNamespace())
-                .withLabel(LABEL_GROUP, resource.getMetadata().getName())
-                .list().getItems();
-        log.info("Found {} pods for MinecraftServerGroup: {}", pods.size(), resource.getMetadata().getName());
-        return pods;
-    }
-
-    private List<Container> createInitContainers(MinecraftServerGroup resource) {
-        Container initContainer = new ContainerBuilder()
-                .withName("init-copy-config")
-                .withImage(INIT_IMAGE)
-                .withVolumeMounts(
-                        new VolumeMountBuilder()
-                                .withName("config-volume")
-                                .withMountPath("/data/config")
-                                .build(),
-                        new VolumeMountBuilder()
-                                .withName("config-tmp-volume")
-                                .withMountPath("/data/config-tmp")
-                                .build()
-                )
-                .build();
-
-        log.info("Creating init container for Pod in MinecraftServerGroup: {}", resource.getMetadata().getName());
-        return List.of(initContainer);
-    }
-
-
-    private List<Container> createMinecraftContainers(MinecraftServerGroup resource) {
-        MinecraftServerGroupSpec spec = resource.getSpec();
-        Container container = new ContainerBuilder()
-                .withName("minecraft")
-                .withImage("itzg/minecraft-server:latest")
-                .withEnv(
-                        new EnvVar("TYPE", "PAPER", null),
-                        new EnvVar("EULA", spec.getEula() != null ? spec.getEula().toString() : "false", null),
-                        new EnvVar("ONLINE_MODE", "false", null),
-                        new EnvVar("VERSION", spec.getVersion() != null ? spec.getVersion() : "LATEST", null)
-                )
-                .withPorts(new ContainerPortBuilder().withContainerPort(25565).build())
-                .withVolumeMounts(
-                        new VolumeMountBuilder()
-                                .withName("config-volume")
-                                .withMountPath("/data/config")
-                                .withReadOnly(false)
-                                .build()
-                )
-                .withNewResourcesLike(resource.getSpec().getResourceRequirements())
-                .endResources()
-                .build();
-
-        log.info("Creating container spec for Pod in MinecraftServerGroup: {}", resource.getMetadata().getName());
-        return List.of(container);
-    }
-
-    private void createOrUpdateConfigMap(MinecraftServerGroup resource) {
-        ConfigMap cm = kubernetesClient.configMaps()
-                .inNamespace(resource.getMetadata().getNamespace())
-                .withName(getConfigMapName(resource))
-                .get();
-
-        if(cm == null) {
-            return;
-        }
-
-        String spigotYml = downloadFile("https://raw.githubusercontent.com/dayyeeet/minecraft-default-configs/main/%s/spigot.yml".formatted(resource.getSpec().getVersion()));
-        String paperGlobalYml = downloadFile("https://raw.githubusercontent.com/dayyeeet/minecraft-default-configs/main/%s/paper-global.yml".formatted(resource.getSpec().getVersion()));
-        String paperWorldYml = downloadFile("https://raw.githubusercontent.com/dayyeeet/minecraft-default-configs/main/%s/paper-world-defaults.yml".formatted(resource.getSpec().getVersion()));
-
-        Yaml yaml = new Yaml();
-        Map<String, Object> paperGlobalConfig = yaml.load(paperGlobalYml);
-        Map<String, Object> proxies = (Map<String, Object>) paperGlobalConfig.get("proxies");
-        if (proxies != null) {
-            Map<String, Object> velocity = (Map<String, Object>) proxies.get("velocity");
-            if (velocity != null) {
-                velocity.put("enabled", true);
-                velocity.put("online-mode", false);
-                velocity.put("secret", ProxyPodUtil.SECRET);
-            }
-        }
-
-        DumperOptions options = new DumperOptions();
-        options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
-        Yaml modifiedYaml = new Yaml(options);
-        String modifiedPaperGlobalYml = modifiedYaml.dump(paperGlobalConfig);
-
-        ConfigMap configMap = new ConfigMapBuilder()
-                .withNewMetadata()
-                .withName(getConfigMapName(resource))
-                .withNamespace(resource.getMetadata().getNamespace())
-                .endMetadata()
-                .addToData("spigot.yml", spigotYml)
-                .addToData("paper-global.yml", modifiedPaperGlobalYml)
-                .addToData("paper-world-defaults.yml", paperWorldYml)
-                .build();
-
-        kubernetesClient.configMaps()
-                .inNamespace(resource.getMetadata().getNamespace())
-                .createOrReplace(configMap);
-        log.info("Created/Updated ConfigMap for MinecraftServerGroup: {}", resource.getMetadata().getName());
-    }
-
-
-    private String downloadFile(String fileURL) {
-        StringBuilder content = new StringBuilder();
-        try {
-            URL url = new URL(fileURL);
-            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-            connection.setRequestMethod("GET");
-
-            try (BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()))) {
-                content.append(in.lines().collect(Collectors.joining("\n")));
-            }
-        } catch (Exception e) {
-            log.error("Error downloading file from URL: {}", fileURL, e);
-        }
-        return content.toString();
-    }
-
-    private void deleteConfigMap(MinecraftServerGroup resource) {
-        kubernetesClient.configMaps()
-                .inNamespace(resource.getMetadata().getNamespace())
-                .withName("minecraft-config-" + resource.getMetadata().getName())
-                .delete();
-        log.info("Deleted ConfigMap for MinecraftServerGroup: {}", resource.getMetadata().getName());
-    }
-
-    private String getPodName(MinecraftServerGroup resource, int index) {
-        return resource.getMetadata().getName() + "-" + index;
-    }
-
-    private String getConfigMapName(MinecraftServerGroup resource) {
-        return "minecraft-config-" + resource.getMetadata().getName();
+    @Override
+    public DeleteControl cleanup(MinecraftServerGroup resource, Context<MinecraftServerGroup> context) {
+        log.info("Deleting MinecraftServerGroup: {}", resource.getMetadata().getName());
+        serverPodUtil.delete(resource);
+        serverConfigUtil.delete(resource);
+        return DeleteControl.defaultDelete();
     }
 }
 

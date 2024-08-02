@@ -4,14 +4,9 @@ import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.cus
 import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.customresources.MinecraftServerGroupSpec;
 import com.aoldacraft.minecraftkubernetesstack.operator.minecraftservergroup.customresources.MinecraftServerGroupStatus;
 import lombok.Data;
-import org.springframework.data.annotation.Id;
-import org.springframework.data.mongodb.core.mapping.Document;
 
-@Document(collection = "minecraftservergroups")
 @Data
 public class MinecraftServerGroupInfo {
-
-    @Id
     private String uuid;
     private String name;
     private String namespace;

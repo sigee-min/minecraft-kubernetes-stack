@@ -238,6 +238,8 @@ spec:
             type: object
           status:
             properties:
+              configMapObservedGeneration:
+                type: integer
               observedGeneration:
                 type: integer
               podIPs:

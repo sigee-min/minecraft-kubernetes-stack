@@ -24,11 +24,6 @@ public class MinecraftGroupInfoController {
         return ResponseEntity.ok(minecraftGroupService.getAllGroups());
     }
 
-    @GetMapping("/{name}")
-    public ResponseEntity<MinecraftServerGroupInfo> getGroup(@PathVariable String name) {
-        return ResponseEntity.ok(minecraftGroupService.getGroup(name));
-    }
-
     @GetMapping(value = "/connect", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public ResponseEntity<SseEmitter> connect() {
         SseEmitter emitter = new SseEmitter(TIMEOUT);

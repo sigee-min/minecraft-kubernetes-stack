@@ -21,7 +21,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 @ControllerConfiguration
-public class MinecraftProxyOperator implements Reconciler<MinecraftProxy>, EventSourceInitializer<MinecraftProxy>, Deleter<MinecraftProxy> {
+public class MinecraftProxyOperator implements Reconciler<MinecraftProxy>, EventSourceInitializer<MinecraftProxy>, Cleaner<MinecraftProxy> {
   private static final String LABEL_GROUP = "minecraftproxy";
   private final Logger log = LoggerFactory.getLogger(MinecraftProxyOperator.class);
   private final KubernetesClient kubernetesClient;
@@ -50,9 +50,9 @@ public class MinecraftProxyOperator implements Reconciler<MinecraftProxy>, Event
   @Override
   public UpdateControl<MinecraftProxy> reconcile(MinecraftProxy resource, Context<MinecraftProxy> context) {
     log.info("Reconciling MinecraftProxy: {}", resource.getMetadata().getName());
-
     try {
-      boolean specChanged = !Objects.equals(resource.getMetadata().getGeneration(), resource.getStatus().getObservedGeneration());
+      boolean specChanged = resource.getStatus() == null ||
+              !Objects.equals(resource.getMetadata().getGeneration(), resource.getStatus().getObservedGeneration());
       if (specChanged) {
         log.info("Spec changed for MinecraftProxy: {}, deleting and recreating Pods", resource.getMetadata().getName());
         ProxyPodUtil.deleteAllPods(kubernetesClient, resource);
@@ -71,17 +71,6 @@ public class MinecraftProxyOperator implements Reconciler<MinecraftProxy>, Event
     return UpdateControl.noUpdate();
   }
 
-  @Override
-  public void delete(MinecraftProxy resource, Context<MinecraftProxy> context) {
-    try {
-      log.info("Deleting MinecraftProxy: {}", resource.getMetadata().getName());
-      ProxyPodUtil.deleteAllPods(kubernetesClient, resource);
-      ProxyServiceUtil.deleteService(kubernetesClient, resource);
-    } catch (Exception e) {
-      log.error("Error deleting for MinecraftProxy: {}", resource.getMetadata().getName(), e);
-    }
-  }
-
   private void updateStatus(MinecraftProxy resource) {
     List<Pod> pods = ProxyPodUtil.getPods(kubernetesClient, resource);
     Set<String> podIPs = pods.stream()
@@ -95,5 +84,17 @@ public class MinecraftProxyOperator implements Reconciler<MinecraftProxy>, Event
     status.setPodIPs(new ArrayList<>(podIPs));
     status.setState(podIPs.isEmpty() ? "Not Ready" : "Ready");
     resource.setStatus(status);
+  }
+
+  @Override
+  public DeleteControl cleanup(MinecraftProxy resource, Context<MinecraftProxy> context) {
+    try {
+      log.info("Deleting MinecraftProxy: {}", resource.getMetadata().getName());
+      ProxyPodUtil.deleteAllPods(kubernetesClient, resource);
+      ProxyServiceUtil.deleteService(kubernetesClient, resource);
+    } catch (Exception e) {
+      log.error("Error deleting for MinecraftProxy: {}", resource.getMetadata().getName(), e);
+    }
+    return DeleteControl.defaultDelete();
   }
 }
